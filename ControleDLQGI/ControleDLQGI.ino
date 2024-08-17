@@ -23,7 +23,13 @@ const float alpha_w = 0.5;
 const float r_w = 0.03;
 const float w = 11e-2;
 const float K[3] = {-44.9181, -30.9875, -6.1045};
-const float Ki = 35.3553;
+const float Ki = 35.3553; // original
+// const float K[3] = {-45.9680, -25.2098, -5.4481};
+// const float Ki = 10.5714; // funciona
+// const float K[3] = {-120.0131, -83.2219, -14.5841};
+// const float Ki = 5.2857; // não alcançou erro nulo
+// const float K[3] = {-59.8767, -35.5777, -7.2907};
+// const float Ki = 37.0000; // final?
 
 // GLOBALS VARIABLES
 ESP32Encoder encoder_r;
@@ -93,14 +99,23 @@ void taskFlash(void* pvParameter) {
       break;
     }
     
-    vTaskDelay(pdMS_TO_TICKS(1));
+    vTaskDelay(pdMS_TO_TICKS(1000*ts*10));
   }
 
   vTaskDelete(NULL);
 }
 
+int cycle_count = 0;
 void taskControl(void* pvParameter) {
   xTaskCreate(&taskFlash, "task_flash", 4096, NULL, 2, NULL);
+
+  for (int i=0; i<round(2.0/ts); i++) {
+    mpu.getEvent(&a, &g, &temp);
+    g_x = -g.gyro.x;
+    a_pitch = atan2(a.acceleration.z, a.acceleration.y);
+    theta = kalman_theta.getAngle(a_pitch, g_x);
+    delay(1000*ts);
+  }
 
   Data data;
   TickType_t init_loop_time;
@@ -158,12 +173,12 @@ void taskControl(void* pvParameter) {
     error_dx_int += (ref_dx - dx)*ts;
 
     // psi
-    ref_psi_f = 0.99*ref_psi_f + 0.01*ref_psi;
+    ref_psi_f = 0.9962*ref_psi_f + 0.0038*ref_psi;
     error_psi = ref_psi_f - psi;
     error_psi_int += error_psi*ts;
 
     V = -(K[0]*q[0] + K[1]*q[1] + K[2]*q[2]) - Ki*error_dx_int;
-    DeltaV = -3*(error_psi + 2*error_psi_int);
+    DeltaV = -1.5694*(error_psi + error_psi_int/0.7867);
     Vl = (V + DeltaV); 
     Vr = -(V - DeltaV);
 
@@ -178,20 +193,26 @@ void taskControl(void* pvParameter) {
     pwm_value = mapfloat(Vl, -7.4, 7.4, -100, 100);
     motor(pwm_value, L_CHANNEL);
 
-    data.t = t;
-    data.dx = dx;
-    data.theta = theta;
-    data.psi = psi;
-    data.u = V;
-    data.ref_psi = ref_psi;
-    data.ref_dx = ref_dx;
-    data_array[count % BUFFER_SIZE] = data;
+    if (cycle_count % 50 == 0) {
+      data.t = t;
+      data.x = x;
+      data.dx = dx;
+      data.theta = theta;
+      data.psi = psi;
+      data.V = V;
+      data.DeltaV = DeltaV;
+      data.ref_psi = ref_psi;
+      data.ref_dx = ref_dx;
+      data_array[count % BUFFER_SIZE] = data;
+      count++;
+    }
+    cycle_count++;
 
     last_theta = theta;
     last_position_r = position_r;
     last_position_l = position_l;
 
-    count++;
+    // printf("%.02f\n", 1000*((micros()/1e6 - t0) - t));
     vTaskDelayUntil(&init_loop_time, pdMS_TO_TICKS(ts*1000));
   }
 
@@ -232,7 +253,6 @@ void setup() {
   while (startMode == INIT) delay(100);
   if (startMode == RUN) {
     digitalWrite(2, LOW);
-    delay(2000);
     printf("Running Mode...\n");
     xTaskCreate(&taskControl, "task_control", 4096, NULL, 10, NULL);
   } else if (startMode == CONFIG) {
@@ -280,14 +300,13 @@ void loop() {
             Serial.println("Reading: " + filename);
 
             Serial.println("- read from file:");
-            Serial.println("t;u;ref_dx;ref_psi;dx;theta;psi");
+            Serial.println("t;V;DeltaV;ref_dx;ref_psi;x;dx;theta;psi");
             while(file.available()){
-              // Serial.write(file.read());
               if (file.read((uint8_t*)&data_read, sizeof(Data)) != sizeof(Data)) {
                 break;
               }
-              sprintf(buffer, "%.4f;%d;%.4f;%.4f;%.4f;%.4f;%.4f\n", 
-                data_read.t, data_read.u, data_read.ref_dx, data_read.ref_psi, data_read.dx, data_read.theta, data_read.psi);
+              sprintf(buffer, "%.04f;%.04f;%.04f;%.04f;%.04f;%.04f;%.04f;%.04f;%.04f\n", 
+                data_read.t, data_read.V, data_read.DeltaV, data_read.ref_dx, data_read.ref_psi, data_read.x, data_read.dx, data_read.theta, data_read.psi);
               Serial.write(buffer);
             }
           }

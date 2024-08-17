@@ -31,9 +31,11 @@
 
 typedef struct {
   float t;
-  int u;
+  float V;
+  float DeltaV;
   float ref_dx;
   float ref_psi;
+  float x;
   float dx;
   float theta;
   float psi;
